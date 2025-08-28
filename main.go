@@ -53,7 +53,6 @@ type Choice struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println(buildPrompt("Test change", ""))
 		printUsage()
 		return
 	}
@@ -479,7 +478,6 @@ func callAnthropic(config *Config, prompt string) (string, error) {
 	}
 
 	return message.Content[0].AsText().Text, nil
-
 }
 
 func anthropicGetModels(apiKey string) ([]anthropic.ModelInfo, error) {

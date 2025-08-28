@@ -1,18 +1,24 @@
 # Easy Commits
 
-An AI-powered git commit message generator that creates detailed, conventional commit messages based on your git diff and optional user context.
+An AI-powered git commit message generator that creates detailed, structured commit messages based on your git diff and optional user context.
 
 ## Features
 
 - **Multiple AI Providers**: Supports OpenAI, Anthropic Claude, and local Ollama models
-- **Conventional Commits**: Generates messages following conventional commit format
+- **Smart Diff Detection**: Automatically detects staged changes, falls back to unstaged changes if none staged
 - **User Context**: Add additional context to help the AI understand your changes
-- **Interactive**: Shows generated message and asks for confirmation before committing
-- **Smart Diff Detection**: Automatically detects staged or unstaged changes
+- **Interactive Confirmation**: Shows generated message and asks for confirmation before committing
+- **Automatic Staging**: Stages all changes before committing (runs `git add .`)
+- **Claude Thinking Mode**: Advanced reasoning capabilities for Anthropic Claude models
 
 ## Installation
 
-1. Clone this repository
+### Option 1: Build from Source
+1. Clone this repository:
+   ```bash
+   git clone <repository-url>
+   cd easy-commits
+   ```
 2. Build the binary:
    ```bash
    go build -o easy-commits
@@ -22,30 +28,38 @@ An AI-powered git commit message generator that creates detailed, conventional c
    sudo mv easy-commits /usr/local/bin/
    ```
 
-## Setup
+### Option 2: Using Go Install
+```bash
+go install github.com/your-username/easy-commits@latest
+```
 
-First, configure your AI provider:
+## Configuration
+
+Configure your AI provider before first use:
 
 ```bash
 easy-commits config
 ```
 
-You'll be prompted to select a provider and enter your credentials:
+### Provider Options
 
-### OpenAI
-- Provider: `openai`
-- API Key: Your OpenAI API key
-- Model: `gpt-3.5-turbo` (default)
+#### OpenAI
+- **Provider**: `openai`
+- **API Key**: Your OpenAI API key
+- **Model**: Automatically set to `gpt-3.5-turbo`
 
-### Anthropic Claude
-- Provider: `anthropic`
-- API Key: Your Anthropic API key
-- Model: `claude-3-haiku-20240307` (default)
+#### Anthropic Claude
+- **Provider**: `anthropic`
+- **API Key**: Your Anthropic API key
+- **Model**: Choose from available Claude models (fetched dynamically)
+- **Token Limit**: Configure max tokens (default: 500, thinking mode: 2048)
+- **Thinking Mode**: Enable advanced reasoning for Opus/Sonnet models
+  - Budget tokens: Minimum 1024 for thinking mode
 
-### Ollama (Local)
-- Provider: `ollama`
-- Base URL: `http://localhost:11434` (default)
-- Model: Your local model name (e.g., `llama2`, `codellama`)
+#### Ollama (Local)
+- **Provider**: `ollama`
+- **Base URL**: Default `http://localhost:11434`
+- **Model**: Your local model name (e.g., `llama2`, `codellama`, `mistral`)
 
 Configuration is saved to `~/.easy-commits-config.json`
 
@@ -53,16 +67,17 @@ Configuration is saved to `~/.easy-commits-config.json`
 
 ### Basic Usage
 
-Stage your changes and generate a commit:
+Generate and create a commit with AI-generated message:
 ```bash
-git add .
 easy-commits commit
 ```
 
-Or let easy-commits stage all changes automatically:
-```bash
-easy-commits commit
-```
+The tool will:
+1. Check for staged changes (uses `git diff --cached`)
+2. If no staged changes, check for unstaged changes (uses `git diff`)
+3. Generate a commit message using AI
+4. Show the message for review
+5. Stage all changes and commit if approved
 
 ### With Additional Context
 
@@ -73,42 +88,53 @@ easy-commits commit --context "Fixed the authentication bug that was causing log
 
 ### Example Workflow
 
-1. Make your changes
+1. Make your changes to files
 2. Run `easy-commits commit`
 3. Review the generated commit message
-4. Confirm or cancel the commit
+4. Type `y` to confirm or `n` to cancel
+5. Changes are automatically staged and committed
 
 ## Generated Commit Message Format
 
-The tool generates commit messages following the conventional commit format:
+The tool generates structured commit messages with:
 
+1. **Subject line** (≤50 characters) - Brief summary in imperative mood
+2. **Bullet points** - Summarized changes from the diff
+3. **Detailed body** - Context and reasoning for the changes
+
+Example output:
 ```
-type(scope): description
+Implement user authentication system
 
-Optional longer description explaining the changes
+- Add login and registration forms
+- Create user model and database migration
+- Implement password hashing and verification
+- Set up session management
+
+This change lays the foundation for user accounts and secure access to the application. It addresses the security requirements outlined in ticket #123.
 ```
-
-Types include:
-- `feat`: New features
-- `fix`: Bug fixes
-- `docs`: Documentation changes
-- `style`: Code style changes
-- `refactor`: Code refactoring
-- `test`: Test additions or changes
-- `chore`: Maintenance tasks
 
 ## Commands
 
-- `easy-commits config` - Configure AI provider and credentials
-- `easy-commits commit` - Generate and create a commit
-- `easy-commits commit --context "description"` - Add user context
-- `easy-commits help` - Show help information
+| Command | Description |
+|---------|-------------|
+| `easy-commits config` | Configure AI provider and credentials |
+| `easy-commits commit` | Generate and create a commit |
+| `easy-commits commit --context "description"` | Add user context to the commit generation |
+| `easy-commits help` | Show help information |
 
 ## Requirements
 
-- Go 1.24.6 or later
-- Git repository
-- API key for chosen AI provider (or local Ollama setup)
+- **Go**: 1.21 or later
+- **Git**: Must be in a git repository
+- **API Access**: Valid API key for chosen AI provider (or local Ollama setup)
+
+## Error Handling
+
+- **Not in git repo**: Tool checks for git repository before proceeding
+- **No changes**: Detects when there are no changes to commit
+- **API errors**: Provides clear error messages for API failures
+- **Configuration**: Prompts to run config if no configuration found
 
 ## License
 
