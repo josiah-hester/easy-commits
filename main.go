@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,10 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/anthropics/anthropic-sdk-go/option"
+
+	"github.com/anthropics/anthropic-sdk-go"
 )
 
 type Config struct {
@@ -75,7 +80,6 @@ func printUsage() {
 	fmt.Println("  easy-commits help      Show this help message")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  easy-commits config")
 	fmt.Println("  easy-commits commit")
 	fmt.Println("  easy-commits commit --context \"Fixed the login bug\"")
 }
@@ -97,16 +101,66 @@ func handleConfig() {
 		}
 		fmt.Print("Enter model name (e.g., llama2, codellama): ")
 		fmt.Scanln(&config.Model)
-	} else {
+	} else if config.Provider == "anthropic" {
 		fmt.Print("Enter API key: ")
 		fmt.Scanln(&config.APIKey)
 
-		switch config.Provider {
-		case "openai":
-			config.Model = "gpt-3.5-turbo"
-		case "anthropic":
-			config.Model = "claude-3-haiku-20240307"
+		claudeModels, err := anthropicGetModels(config.APIKey)
+		if err != nil {
+			fmt.Printf("Error getting Claude models: %v\n", err)
+			return
 		}
+
+		var modelInput string
+
+		for {
+			for _, model := range claudeModels {
+				fmt.Println(strings.ReplaceAll(model.DisplayName, " ", "-"))
+			}
+
+			fmt.Print("Select Claude model: ")
+			fmt.Scanln(&modelInput)
+
+			fmt.Println(modelInput)
+
+			for _, model := range claudeModels {
+				if strings.ReplaceAll(model.DisplayName, " ", "-") == modelInput {
+					config.Model = model.ID
+					break
+				}
+			}
+
+			if config.Model != "" {
+				break
+			}
+
+			fmt.Println("Incorrect Model Name")
+		}
+
+		fmt.Println("Enter Claude thinking config:")
+		fmt.Println("Type: (enabled/disabled)")
+		fmt.Scanln(&config.Thinking.Type)
+		if config.Thinking.Type == "enabled" {
+			fmt.Print("Enter Claude tokens (default for thinking - 2048): ")
+			fmt.Scanln(&config.Tokens)
+			if config.Tokens <= 2048 {
+				config.Tokens = 2048
+			}
+			fmt.Println("Budget tokens (minimum for thinking - 1024):")
+			fmt.Scanln(&config.Thinking.Budget_tokens)
+			if config.Thinking.Budget_tokens <= 1024 {
+				config.Thinking.Budget_tokens = 1024
+			}
+		} else {
+			fmt.Print("Enter Claude tokens (default - 500): ")
+			fmt.Scanln(&config.Tokens)
+			if config.Tokens <= 0 {
+				config.Tokens = 500
+			}
+		}
+
+	} else {
+		config.Model = "gpt-3.5-turbo"
 	}
 
 	configData, err := json.MarshalIndent(config, "", "  ")
@@ -372,6 +426,10 @@ func callOpenAI(config *Config, prompt string) (string, error) {
 }
 
 func callAnthropic(config *Config, prompt string) (string, error) {
+	client := anthropic.NewClient(
+		option.WithAPIKey(config.APIKey),
+	)
+
 	var maxTokens int
 	if config.Tokens > 0 {
 		maxTokens = config.Tokens
@@ -379,68 +437,62 @@ func callAnthropic(config *Config, prompt string) (string, error) {
 		maxTokens = 500
 	}
 
-	reqBody := map[string]any{
-		"model":      config.Model,
-		"max_tokens": maxTokens,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
+	model := anthropic.Model(config.Model)
+
+	promptData := []anthropic.ContentBlockParamUnion{
+		{
+			OfText: &anthropic.TextBlockParam{
+				Text: prompt,
+			},
 		},
 	}
 
+	thinking := anthropic.ThinkingConfigParamUnion{}
+
 	if config.Thinking.Type == "enabled" && (strings.Contains(config.Model, "opus") || strings.Contains(config.Model, "sonnet")) {
-		reqBody["thinking"] = config.Thinking
+		thinking.OfEnabled = &anthropic.ThinkingConfigEnabledParam{
+			BudgetTokens: int64(config.Thinking.Budget_tokens),
+		}
+	} else {
+		thinking.OfDisabled = &anthropic.ThinkingConfigDisabledParam{}
 	}
 
-	jsonData, err := json.Marshal(reqBody)
+	reqBody := anthropic.MessageNewParams{
+		Model:     model,
+		MaxTokens: int64(maxTokens),
+		Thinking:  thinking,
+		Messages: []anthropic.MessageParam{
+			{
+				Role:    "user",
+				Content: promptData,
+			},
+		},
+	}
+
+	message, err := client.Messages.New(context.TODO(), reqBody)
 	if err != nil {
 		return "", err
 	}
 
-	req, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", config.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	var anthropicResp map[string]any
-	err = json.Unmarshal(body, &anthropicResp)
-	if err != nil {
-		return "", err
-	}
-
-	content, ok := anthropicResp["content"].([]any)
-	if !ok || len(content) == 0 {
+	if message == nil {
 		return "", fmt.Errorf("no response from Anthropic")
 	}
 
-	textContent, ok := content[0].(map[string]any)
-	if !ok {
-		return "", fmt.Errorf("invalid response format from Anthropic")
+	return message.Content[0].AsText().Text, nil
+
+}
+
+func anthropicGetModels(apiKey string) ([]anthropic.ModelInfo, error) {
+	client := anthropic.NewClient(
+		option.WithAPIKey(apiKey),
+	)
+
+	res, err := client.Models.List(context.TODO(), anthropic.ModelListParams{})
+	if err != nil {
+		return nil, err
 	}
 
-	text, ok := textContent["text"].(string)
-	if !ok {
-		return "", fmt.Errorf("no text in Anthropic response")
-	}
-
-	text = strings.TrimSpace(text)
-
-	return text, nil
+	return res.Data, nil
 }
 
 func callOllama(config *Config, prompt string) (string, error) {
