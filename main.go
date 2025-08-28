@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -18,6 +19,7 @@ type Config struct {
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"`
 	BaseURL  string `json:"base_url,omitempty"`
+	Tokens   int    `json:"tokens,omitempty"`
 }
 
 type OpenAIRequest struct {
@@ -40,6 +42,7 @@ type Choice struct {
 
 func main() {
 	if len(os.Args) < 2 {
+		fmt.Println(buildPrompt("Test change", ""))
 		printUsage()
 		return
 	}
@@ -245,24 +248,75 @@ func generateCommitMessage(config *Config, diff, userContext string) (string, er
 }
 
 func buildPrompt(diff, userContext string) string {
-	prompt := `You are an expert at writing clear, concise git commit messages. Based on the git diff provided, generate a commit message that follows these guidelines:
+	var prompt string
 
-1. Use the conventional commit format: type(scope): description
-2. Types: feat, fix, docs, style, refactor, test, chore
-3. Keep the first line under 50 characters
-4. Use imperative mood ("add" not "added")
-5. Be specific about what changed and why
+	templ, err := template.New("prompt").Parse(
+		`You are an AI assistant tasked with creating a detailed commit message based on a git diff. Your goal is to provide a clear, concise, and informative commit message that accurately describes the changes made in the commit.
 
-Git diff:
-` + diff
+    Here is the git diff you will be analyzing:
+    <git_diff>
+    {{.GIT_DIFF}}
+    </git_diff>
 
-	if userContext != "" {
-		prompt += "\n\nAdditional context from user: " + userContext
+    Carefully examine the git diff provided above. Pay attention to:
+    1. Files that have been modified, added, or deleted
+    2. The nature of the changes (e.g., bug fixes, feature additions, refactoring)
+    3. Any patterns or themes in the changes across multiple files
+
+    Create a detailed commit message that:
+    1. Starts with a brief (50 characters or less) summary of the change
+    2. Follows with a more detailed explanation, if necessary
+    3. Uses the imperative mood in the subject line (e.g., "Fix bug" not "Fixed bug" or "Fixes bug")
+    4. Includes relevant details such as:
+      - What was changed
+      - Why the change was necessary
+      - Any potential side effects or areas that might be affected
+
+    If user context is provided, incorporate it into your commit message to provide additional clarity or background information. Here is the user context (if any):
+    <user_context>
+    {{.USER_CONTEXT}}
+    </user_context>
+
+    Format your response as follows:
+    1. Subject line (50 characters or less)
+    2. Summarized diff changes
+    3. More detailed body of different logical changes that occures in the diff and added summarized context if provided
+
+    Here is the example format:
+
+    <example_format>
+    Implement user authentication system
+
+    - Add login and registration forms
+    - Create user model and database migration
+    - Implement password hashing and verification
+    - Set up session management
+
+    This change lays the foundation for user accounts and secure access to the application. It addresses the security requirements outlined in ticket #123.
+    </example_format>
+
+
+    Remember to keep the subject line concise and use the body for any necessary additional details or context. Only include the formatted message in your response.`,
+	)
+
+	if err != nil {
+		panic(err)
 	}
 
-	prompt += "\n\nGenerate only the commit message, no additional text or explanation."
+	promptWriter := bytes.NewBufferString(prompt)
 
-	return prompt
+	err = templ.ExecuteTemplate(
+		promptWriter,
+		"prompt",
+		map[string]string{
+			"GIT_DIFF":     diff,
+			"USER_CONTEXT": userContext,
+		})
+	if err != nil {
+		panic(err)
+	}
+
+	return promptWriter.String()
 }
 
 func callOpenAI(config *Config, prompt string) (string, error) {
@@ -312,9 +366,15 @@ func callOpenAI(config *Config, prompt string) (string, error) {
 }
 
 func callAnthropic(config *Config, prompt string) (string, error) {
-	reqBody := map[string]interface{}{
+	var maxTokens int
+	if config.Tokens > 0 {
+		maxTokens = config.Tokens
+	} else {
+		maxTokens = 500
+	}
+	reqBody := map[string]any{
 		"model":      config.Model,
-		"max_tokens": 150,
+		"max_tokens": maxTokens,
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
@@ -346,18 +406,18 @@ func callAnthropic(config *Config, prompt string) (string, error) {
 		return "", err
 	}
 
-	var anthropicResp map[string]interface{}
+	var anthropicResp map[string]any
 	err = json.Unmarshal(body, &anthropicResp)
 	if err != nil {
 		return "", err
 	}
 
-	content, ok := anthropicResp["content"].([]interface{})
+	content, ok := anthropicResp["content"].([]any)
 	if !ok || len(content) == 0 {
 		return "", fmt.Errorf("no response from Anthropic")
 	}
 
-	textContent, ok := content[0].(map[string]interface{})
+	textContent, ok := content[0].(map[string]any)
 	if !ok {
 		return "", fmt.Errorf("invalid response format from Anthropic")
 	}
@@ -367,11 +427,13 @@ func callAnthropic(config *Config, prompt string) (string, error) {
 		return "", fmt.Errorf("no text in Anthropic response")
 	}
 
-	return strings.TrimSpace(text), nil
+	text = strings.TrimSpace(text)
+
+	return text, nil
 }
 
 func callOllama(config *Config, prompt string) (string, error) {
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"model":  config.Model,
 		"prompt": prompt,
 		"stream": false,
@@ -402,7 +464,7 @@ func callOllama(config *Config, prompt string) (string, error) {
 		return "", err
 	}
 
-	var ollamaResp map[string]interface{}
+	var ollamaResp map[string]any
 	err = json.Unmarshal(body, &ollamaResp)
 	if err != nil {
 		return "", err
