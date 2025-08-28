@@ -15,11 +15,17 @@ import (
 )
 
 type Config struct {
-	Provider string `json:"provider"`
-	APIKey   string `json:"api_key"`
-	Model    string `json:"model"`
-	BaseURL  string `json:"base_url,omitempty"`
-	Tokens   int    `json:"tokens,omitempty"`
+	Provider string         `json:"provider"`
+	APIKey   string         `json:"api_key"`
+	Model    string         `json:"model"`
+	BaseURL  string         `json:"base_url,omitempty"`
+	Tokens   int            `json:"tokens,omitempty"`
+	Thinking ClaudeThinking `json:"claude-thinking"`
+}
+
+type ClaudeThinking struct {
+	Type          string `json:"type,omitempty"`
+	Budget_tokens int    `json:"budget_tokens,omitempty"`
 }
 
 type OpenAIRequest struct {
@@ -372,12 +378,17 @@ func callAnthropic(config *Config, prompt string) (string, error) {
 	} else {
 		maxTokens = 500
 	}
+
 	reqBody := map[string]any{
 		"model":      config.Model,
 		"max_tokens": maxTokens,
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
+	}
+
+	if config.Thinking.Type == "enabled" && (strings.Contains(config.Model, "opus") || strings.Contains(config.Model, "sonnet")) {
+		reqBody["thinking"] = config.Thinking
 	}
 
 	jsonData, err := json.Marshal(reqBody)
